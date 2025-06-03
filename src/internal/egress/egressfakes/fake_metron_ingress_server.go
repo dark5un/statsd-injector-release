@@ -46,10 +46,6 @@ type FakeMetronIngressServer struct {
 	senderReturnsOnCall map[int]struct {
 		result1 error
 	}
-	mustEmbedUnimplementedIngressServerStub        func()
-	mustEmbedUnimplementedIngressServerMutex       sync.RWMutex
-	mustEmbedUnimplementedIngressServerArgsForCall []struct {
-	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
@@ -241,30 +237,6 @@ func (fake *FakeMetronIngressServer) SenderReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
-func (fake *FakeMetronIngressServer) mustEmbedUnimplementedIngressServer() {
-	fake.mustEmbedUnimplementedIngressServerMutex.Lock()
-	fake.mustEmbedUnimplementedIngressServerArgsForCall = append(fake.mustEmbedUnimplementedIngressServerArgsForCall, struct {
-	}{})
-	stub := fake.mustEmbedUnimplementedIngressServerStub
-	fake.recordInvocation("mustEmbedUnimplementedIngressServer", []interface{}{})
-	fake.mustEmbedUnimplementedIngressServerMutex.Unlock()
-	if stub != nil {
-		fake.mustEmbedUnimplementedIngressServerStub()
-	}
-}
-
-func (fake *FakeMetronIngressServer) MustEmbedUnimplementedIngressServerCallCount() int {
-	fake.mustEmbedUnimplementedIngressServerMutex.RLock()
-	defer fake.mustEmbedUnimplementedIngressServerMutex.RUnlock()
-	return len(fake.mustEmbedUnimplementedIngressServerArgsForCall)
-}
-
-func (fake *FakeMetronIngressServer) MustEmbedUnimplementedIngressServerCalls(stub func()) {
-	fake.mustEmbedUnimplementedIngressServerMutex.Lock()
-	defer fake.mustEmbedUnimplementedIngressServerMutex.Unlock()
-	fake.mustEmbedUnimplementedIngressServerStub = stub
-}
-
 func (fake *FakeMetronIngressServer) Invocations() map[string][][]interface{} {
 	fake.invocationsMutex.RLock()
 	defer fake.invocationsMutex.RUnlock()
@@ -274,8 +246,6 @@ func (fake *FakeMetronIngressServer) Invocations() map[string][][]interface{} {
 	defer fake.sendMutex.RUnlock()
 	fake.senderMutex.RLock()
 	defer fake.senderMutex.RUnlock()
-	fake.mustEmbedUnimplementedIngressServerMutex.RLock()
-	defer fake.mustEmbedUnimplementedIngressServerMutex.RUnlock()
 	copiedInvocations := map[string][][]interface{}{}
 	for key, value := range fake.invocations {
 		copiedInvocations[key] = value

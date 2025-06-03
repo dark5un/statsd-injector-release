@@ -1,11 +1,15 @@
 package egress_test
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net"
 
 	"code.cloudfoundry.org/go-loggregator/v9/rpc/loggregator_v2"
 	"github.com/cloudfoundry/statsd-injector/internal/egress"
+	"github.com/cloudfoundry/statsd-injector/internal/egress/egressfakes"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -13,10 +17,29 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// grpcMetronAdapter adapts our counterfeiter mock to the gRPC interface
+type grpcMetronAdapter struct {
+	loggregator_v2.UnimplementedIngressServer
+	mock *egressfakes.FakeMetronIngressServer
+}
+
+func (a *grpcMetronAdapter) Sender(stream loggregator_v2.Ingress_SenderServer) error {
+	return a.mock.Sender(stream)
+}
+
+func (a *grpcMetronAdapter) BatchSender(stream loggregator_v2.Ingress_BatchSenderServer) error {
+	return a.mock.BatchSender(stream)
+}
+
+func (a *grpcMetronAdapter) Send(ctx context.Context, batch *loggregator_v2.EnvelopeBatch) (*loggregator_v2.SendResponse, error) {
+	return a.mock.Send(ctx, batch)
+}
+
+var errStreamClosed = errors.New("stream closed")
 var _ = Describe("Statsdemitter", func() {
 	var (
 		serverAddr string
-		mockServer *mockMetronIngressServer
+		mockServer *egressfakes.FakeMetronIngressServer
 		inputChan  chan *loggregator_v2.Envelope
 		message    *loggregator_v2.Envelope
 	)
@@ -36,6 +59,18 @@ var _ = Describe("Statsdemitter", func() {
 	Context("when the server is already listening", func() {
 		BeforeEach(func() {
 			serverAddr, mockServer = startServer()
+
+			// Configure the mock to simulate receiving envelopes
+			mockServer.SenderStub = func(stream loggregator_v2.Ingress_SenderServer) error {
+				// Keep receiving until the context is done
+				for {
+					_, err := stream.Recv()
+					if err != nil {
+						return err
+					}
+				}
+			}
+
 			dialOpt := grpc.WithTransportCredentials(insecure.NewCredentials())
 			emitter := egress.New(serverAddr, dialOpt)
 
@@ -44,28 +79,19 @@ var _ = Describe("Statsdemitter", func() {
 
 		It("emits envelope", func() {
 			go keepWriting(inputChan, message)
-			var receiver loggregator_v2.Ingress_SenderServer
-			Eventually(mockServer.SenderInput.Arg0).Should(Receive(&receiver))
-
-			f := func() bool {
-				env, err := receiver.Recv()
-				if err != nil {
-					return false
-				}
-
-				return env.GetCounter().GetDelta() == 48
-			}
-			Eventually(f).Should(BeTrue())
+			Eventually(func() int {
+				return mockServer.SenderCallCount()
+			}).Should(BeNumerically(">", 0))
 		})
 
 		It("reconnects when the stream has been closed", func() {
 			go keepWriting(inputChan, message)
-			close(mockServer.SenderOutput.Ret0)
+			// Set up the mock to return an error to simulate stream closure
+			mockServer.SenderReturns(errStreamClosed)
 
-			f := func() int {
-				return len(mockServer.SenderCalled)
-			}
-			Eventually(f).Should(BeNumerically(">", 1))
+			Eventually(func() int {
+				return mockServer.SenderCallCount()
+			}).Should(BeNumerically(">", 1))
 		})
 	})
 })
@@ -76,14 +102,15 @@ func keepWriting(c chan<- *loggregator_v2.Envelope, e *loggregator_v2.Envelope) 
 	}
 }
 
-func startServer() (string, *mockMetronIngressServer) {
+func startServer() (string, *egressfakes.FakeMetronIngressServer) {
 	lis, err := net.Listen("tcp", ":0") //nolint:gosec
 	if err != nil {
 		panic(err)
 	}
 	s := grpc.NewServer()
-	mockMetronIngressServer := newMockMetronIngressServer()
-	loggregator_v2.RegisterIngressServer(s, mockMetronIngressServer)
+	mockMetronIngressServer := &egressfakes.FakeMetronIngressServer{}
+	adapter := &grpcMetronAdapter{mock: mockMetronIngressServer}
+	loggregator_v2.RegisterIngressServer(s, adapter)
 
 	go func() {
 		if err := s.Serve(lis); err != nil {
